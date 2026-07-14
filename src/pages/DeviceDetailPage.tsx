@@ -1,15 +1,18 @@
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
-import { Device, Configuration, DeviceLog, DeviceLocation } from '../types'
+import { Device, Configuration, DeviceLog, DeviceLocation, DeviceContact, DeviceNotificationItem, CallLogItem } from '../types'
 import {
   ArrowLeft, Battery, Wifi, MapPin, RefreshCw,
-  Bell, Terminal, Info, Package, Users, Phone
+  Bell, Terminal, Info, Package, Users, Phone, PhoneIncoming,
+  PhoneOutgoing, PhoneMissed, Mail, Smartphone, Activity, Navigation
 } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 import toast from 'react-hot-toast'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import L from 'leaflet'
 
+// ─── Severity map ──────────────────────────────────────────────────────────
 const SEV: Record<number, { label: string; cls: string }> = {
   1: { label: 'ERROR',   cls: 'badge-red'    },
   2: { label: 'WARN',    cls: 'badge-yellow' },
@@ -18,7 +21,25 @@ const SEV: Record<number, { label: string; cls: string }> = {
   5: { label: 'VERBOSE', cls: 'badge-gray'   },
 }
 
-type Tab = 'info' | 'apps' | 'contacts' | 'calls' | 'logs' | 'locations'
+// ─── Call log helpers ──────────────────────────────────────────────────────
+const CALL_ICONS: Record<string, React.ElementType> = {
+  INCOMING: PhoneIncoming, OUTGOING: PhoneOutgoing, MISSED: PhoneMissed, REJECTED: PhoneMissed,
+}
+const CALL_COLORS: Record<string, string> = {
+  INCOMING: 'text-green-600', OUTGOING: 'text-blue-600', MISSED: 'text-red-600', REJECTED: 'text-red-600',
+}
+const CALL_BADGES: Record<string, string> = {
+  INCOMING: 'badge-green', OUTGOING: 'badge-blue', MISSED: 'badge-red', REJECTED: 'badge-red',
+}
+
+function formatDuration(sec: number): string {
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60); const s = sec % 60
+  return `${m}m ${s}s`
+}
+
+// ─── Components ────────────────────────────────────────────────────────────
+type Tab = 'info' | 'apps' | 'contacts' | 'calls' | 'notifications' | 'logs' | 'locations'
 
 function statusBadge(status: string) {
   const m: Record<string, string> = {
@@ -38,6 +59,141 @@ function Row({ label, value }: { label: string; value?: string | number | boolea
   )
 }
 
+// ─── Live Location Map Component ───────────────────────────────────────────
+function LocationMap({ locations, liveLat, liveLon }: {
+  locations: DeviceLocation[]
+  liveLat?: number | null
+  liveLon?: number | null
+}) {
+  const mapRef = useRef<HTMLDivElement>(null)
+  const mapInstance = useRef<L.Map | null>(null)
+  const markersLayer = useRef<L.LayerGroup | null>(null)
+
+  useEffect(() => {
+    if (!mapRef.current || mapInstance.current) return
+
+    // Fix Leaflet default icon issue
+    delete (L.Icon.Default.prototype as any)._getIconUrl
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    })
+
+    const map = L.map(mapRef.current, {
+      zoomControl: true,
+      attributionControl: true,
+    }).setView([20, 0], 2)
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(map)
+
+    mapInstance.current = map
+    markersLayer.current = L.layerGroup().addTo(map)
+
+    return () => {
+      map.remove()
+      mapInstance.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    const layer = markersLayer.current
+    if (!map || !layer) return
+
+    layer.clearLayers()
+
+    const points: [number, number][] = []
+
+    // Add all location history markers
+    locations.forEach((loc, i) => {
+      const isFirst = i === locations.length - 1
+      const isLatest = i === 0
+      const color = isLatest ? '#ef4444' : '#3b82f6'
+      const size = isLatest ? 14 : 10
+
+      const markerIcon = L.divIcon({
+        className: '',
+        html: `<div style="
+          width:${size}px;height:${size}px;
+          background:${color};
+          border:2px solid white;
+          border-radius:50%;
+          box-shadow:0 2px 6px rgba(0,0,0,0.3);
+          ${isLatest ? 'position:relative;' : ''}
+        "></div>`,
+        iconSize: [size + 4, size + 4],
+        iconAnchor: [(size + 4) / 2, (size + 4) / 2],
+      })
+
+      const marker = L.marker([loc.lat, loc.lon], { icon: markerIcon })
+      marker.bindPopup(`
+        <div style="font-family:sans-serif;font-size:12px">
+          <strong style="color:${color}">${isLatest ? '📍 Latest' : `#${i + 1}`}</strong><br/>
+          ${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)}<br/>
+          <span style="color:#666">${format(new Date(loc.ts), 'MMM dd, yyyy HH:mm:ss')}</span>
+        </div>
+      `)
+      layer.addLayer(marker)
+      points.push([loc.lat, loc.lon])
+    })
+
+    // Add live location marker if available and not already in history
+    if (liveLat != null && liveLon != null) {
+      const hasLive = locations.some(l => Math.abs(l.lat - liveLat) < 0.001 && Math.abs(l.lon - liveLon) < 0.001)
+      if (!hasLive) {
+        const liveIcon = L.divIcon({
+          className: '',
+          html: `<div class="live-marker" style="
+            width:16px;height:16px;
+            background:#ef4444;
+            border:3px solid white;
+            border-radius:50%;
+            box-shadow:0 2px 8px rgba(239,68,68,0.5);
+            position:relative;
+          "></div>`,
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        })
+        const marker = L.marker([liveLat, liveLon], { icon: liveIcon })
+        marker.bindPopup(`
+          <div style="font-family:sans-serif;font-size:12px">
+            <strong style="color:#ef4444">🔴 Live Location</strong><br/>
+            ${liveLat.toFixed(6)}, ${liveLon.toFixed(6)}<br/>
+            <span style="color:#666">Updated in real-time</span>
+          </div>
+        `)
+        layer.addLayer(marker)
+        points.push([liveLat, liveLon])
+      }
+    }
+
+    // Draw polyline connecting all points
+    if (points.length > 1) {
+      L.polyline(points.reverse(), {
+        color: '#3b82f6',
+        weight: 2,
+        opacity: 0.5,
+        dashArray: '5, 8',
+      }).addTo(layer)
+    }
+
+    // Fit bounds to show all markers
+    if (points.length > 0) {
+      const bounds = L.latLngBounds(points.map(p => L.latLng(p[0], p[1])))
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 })
+    }
+  }, [locations, liveLat, liveLon])
+
+  return (
+    <div ref={mapRef} style={{ height: '400px', width: '100%', borderRadius: '0.75rem' }} />
+  )
+}
+
+// ─── Main Page ─────────────────────────────────────────────────────────────
 export default function DeviceDetailPage() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
@@ -45,29 +201,53 @@ export default function DeviceDetailPage() {
   const [configId, setConfigId] = useState('')
   const [pushType, setPushType] = useState('configUpdated')
 
+  // Main device query
   const { data: deviceRes, isLoading } = useQuery({
     queryKey: ['device', id],
     queryFn: () => api.get(`/devices/${id}`),
-    refetchInterval: 30_000,
+    refetchInterval: 15_000, // Refresh every 15s for live data
   })
+
   const { data: configsRes } = useQuery({
     queryKey: ['configurations'],
     queryFn: () => api.get('/configurations'),
   })
+
   const { data: logsRes } = useQuery({
     queryKey: ['device-logs', id],
     queryFn: () => api.get(`/devices/${id}/logs?page=0&size=200`),
     enabled: tab === 'logs',
   })
-  const { data: locsRes } = useQuery({
+
+  const { data: locsRes, refetch: refetchLocs } = useQuery({
     queryKey: ['device-locations', id],
     queryFn: () => api.get(`/devices/${id}/locations`),
     enabled: tab === 'locations',
+    refetchInterval: tab === 'locations' ? 10_000 : false, // Live poll every 10s
   })
+
   const { data: appsRes } = useQuery({
     queryKey: ['device-apps', id],
     queryFn: () => api.get(`/devices/${id}/apps`),
     enabled: tab === 'apps',
+  })
+
+  const { data: contactsRes } = useQuery({
+    queryKey: ['device-contacts', id],
+    queryFn: () => api.get(`/devices/${id}/data/contacts`),
+    enabled: tab === 'contacts',
+  })
+
+  const { data: callsRes } = useQuery({
+    queryKey: ['device-calls', id],
+    queryFn: () => api.get(`/devices/${id}/data/calls`),
+    enabled: tab === 'calls',
+  })
+
+  const { data: notifsRes } = useQuery({
+    queryKey: ['device-notifications', id],
+    queryFn: () => api.get(`/devices/${id}/data/notifications`),
+    enabled: tab === 'notifications',
   })
 
   const { data: countsRes } = useQuery({
@@ -84,17 +264,21 @@ export default function DeviceDetailPage() {
     },
     onError: () => toast.error('Update failed'),
   })
+
   const pushMutation = useMutation({
     mutationFn: () => api.post(`/devices/${id}/push`, { messageType: pushType }),
     onSuccess: () => toast.success('Push queued'),
     onError: () => toast.error('Push failed'),
   })
 
-  const device: Device         = deviceRes?.data?.data
+  const device: Device = deviceRes?.data?.data
   const configs: Configuration[] = configsRes?.data?.data ?? []
-  const logs: DeviceLog[]        = logsRes?.data?.data    ?? []
+  const logs: DeviceLog[] = logsRes?.data?.data ?? []
   const locations: DeviceLocation[] = locsRes?.data?.data ?? []
-  const installedApps: any[]    = appsRes?.data?.data     ?? []
+  const installedApps: any[] = appsRes?.data?.data ?? []
+  const contacts: DeviceContact[] = contactsRes?.data?.data ?? []
+  const callLogs: CallLogItem[] = callsRes?.data?.data ?? []
+  const notifications: DeviceNotificationItem[] = notifsRes?.data?.data ?? []
   const dataCountsMap: Record<string, number> = countsRes?.data?.data ?? {}
 
   useEffect(() => {
@@ -109,23 +293,27 @@ export default function DeviceDetailPage() {
   if (!device) return <div className="text-center py-20 text-gray-400">Device not found</div>
 
   const TABS = [
-    { key: 'info'      as Tab, label: 'Info',      icon: Info },
-    { key: 'apps'      as Tab, label: `Apps (${installedApps.length})`, icon: Package },
-    { key: 'contacts'  as Tab, label: `Contacts (${dataCountsMap.contacts ?? 0})`, icon: Users },
-    { key: 'calls'     as Tab, label: `Call Logs (${dataCountsMap.callLogs ?? 0})`, icon: Phone },
-    { key: 'logs'      as Tab, label: 'Logs',      icon: Terminal },
-    { key: 'locations' as Tab, label: 'Locations', icon: MapPin },
+    { key: 'info'          as Tab, label: 'Info',          icon: Info },
+    { key: 'apps'          as Tab, label: `Apps (${installedApps.length})`,      icon: Package },
+    { key: 'contacts'      as Tab, label: `Contacts (${dataCountsMap.contacts ?? 0})`, icon: Users },
+    { key: 'calls'         as Tab, label: `Calls (${dataCountsMap.callLogs ?? 0})`,    icon: Phone },
+    { key: 'notifications' as Tab, label: `Notifs (${dataCountsMap.notifications ?? 0})`, icon: Bell },
+    { key: 'logs'          as Tab, label: 'Logs',          icon: Terminal },
+    { key: 'locations'     as Tab, label: 'Locations',     icon: Navigation },
   ]
 
   return (
-    <div className="space-y-5 max-w-4xl">
-      {/* Header */}
+    <div className="space-y-5 max-w-5xl">
+      {/* ── Header ── */}
       <div className="flex items-center gap-3 flex-wrap">
         <Link to="/devices" className="p-2 rounded-lg hover:bg-gray-100">
           <ArrowLeft className="w-5 h-5 text-gray-600" />
         </Link>
         <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900 truncate">{device.number}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold text-gray-900 truncate">{device.number}</h1>
+            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">ID: {id}</span>
+          </div>
           <p className="text-sm text-gray-500">{device.model || 'Unknown model'}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -135,26 +323,32 @@ export default function DeviceDetailPage() {
               Synced {formatDistanceToNow(new Date(device.lastSync), { addSuffix: true })}
             </span>
           )}
+          <button onClick={() => {
+            qc.invalidateQueries({ queryKey: ['device', id] })
+            refetchLocs()
+          }} className="btn-secondary text-sm p-2">
+            <RefreshCw className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
-      {/* Quick stats */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="card p-4 flex items-center gap-3">
+      {/* ── Quick stats ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="card p-3 flex items-center gap-3 hover:shadow-md transition-shadow">
           <Battery className="w-5 h-5 text-green-500 flex-shrink-0" />
           <div>
             <p className="text-xs text-gray-500">Battery</p>
             <p className="font-semibold text-sm">{device.batteryLevel != null ? `${device.batteryLevel}%` : '—'}</p>
           </div>
         </div>
-        <div className="card p-4 flex items-center gap-3">
+        <div className="card p-3 flex items-center gap-3 hover:shadow-md transition-shadow">
           <Wifi className="w-5 h-5 text-blue-500 flex-shrink-0" />
           <div>
             <p className="text-xs text-gray-500">Android</p>
             <p className="font-semibold text-sm">{device.androidVersion || '—'}</p>
           </div>
         </div>
-        <div className="card p-4 flex items-center gap-3">
+        <div className="card p-3 flex items-center gap-3 hover:shadow-md transition-shadow">
           <MapPin className="w-5 h-5 text-red-500 flex-shrink-0" />
           <div>
             <p className="text-xs text-gray-500">Location</p>
@@ -163,9 +357,18 @@ export default function DeviceDetailPage() {
             </p>
           </div>
         </div>
+        <div className="card p-3 flex items-center gap-3 hover:shadow-md transition-shadow">
+          <Activity className="w-5 h-5 text-purple-500 flex-shrink-0" />
+          <div>
+            <p className="text-xs text-gray-500">Last Sync</p>
+            <p className="font-semibold text-xs">
+              {device.lastSync ? formatDistanceToNow(new Date(device.lastSync), { addSuffix: true }) : 'Never'}
+            </p>
+          </div>
+        </div>
       </div>
 
-      {/* Controls */}
+      {/* ── Controls ── */}
       <div className="card p-5 grid sm:grid-cols-2 gap-4">
         <div>
           <label className="label">Assign Configuration</label>
@@ -201,15 +404,15 @@ export default function DeviceDetailPage() {
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* ── Tabs ── */}
       <div className="card overflow-hidden">
-        <div className="flex border-b border-gray-100 overflow-x-auto">
+        <div className="flex border-b border-gray-100 overflow-x-auto bg-gray-50/50">
           {TABS.map(t => (
             <button key={t.key} onClick={() => setTab(t.key)}
-              className={`flex items-center gap-2 px-5 py-3 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px
+              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px
                 ${tab === t.key
-                  ? 'border-primary-500 text-primary-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                  ? 'border-primary-500 text-primary-700 bg-white'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-white/50'}`}>
               <t.icon className="w-4 h-4" />
               {t.label}
             </button>
@@ -217,12 +420,13 @@ export default function DeviceDetailPage() {
         </div>
 
         <div className="p-5">
-
-          {/* ── INFO ── */}
+          {/* ══════ INFO TAB ══════ */}
           {tab === 'info' && (
             <div className="grid sm:grid-cols-2 gap-x-10">
               <div>
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Hardware</p>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1">
+                  <Smartphone className="w-3 h-3" /> Hardware
+                </p>
                 <Row label="Device ID"         value={device.number} />
                 <Row label="Model"             value={device.model} />
                 <Row label="Serial"            value={device.serial} />
@@ -235,7 +439,9 @@ export default function DeviceDetailPage() {
                 <Row label="Battery"           value={device.batteryLevel != null ? `${device.batteryLevel}% (${device.batteryCharging ?? 'discharging'})` : undefined} />
               </div>
               <div>
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Network / SIM</p>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1">
+                  <Wifi className="w-3 h-3" /> Network / SIM
+                </p>
                 <Row label="IMEI"        value={device.imei} />
                 <Row label="IMEI 2"      value={device.imei2} />
                 <Row label="Phone"       value={device.phone} />
@@ -245,11 +451,9 @@ export default function DeviceDetailPage() {
                 <Row label="IMSI"        value={device.imsi} />
                 <Row label="IP Address"  value={device.ipAddress} />
                 <Row label="External IP" value={device.externalIp} />
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 mt-4">Custom</p>
-                <Row label="Custom 1"    value={device.custom1} />
-                <Row label="Custom 2"    value={device.custom2} />
-                <Row label="Custom 3"    value={device.custom3} />
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 mt-4">Location</p>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 mt-4 flex items-center gap-1">
+                  <MapPin className="w-3 h-3" /> Location
+                </p>
                 <Row label="Latitude"    value={device.lat} />
                 <Row label="Longitude"   value={device.lon} />
                 {device.lat != null && (
@@ -259,33 +463,17 @@ export default function DeviceDetailPage() {
                     <MapPin className="w-3 h-3" /> Open in Google Maps
                   </a>
                 )}
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 mt-4 flex items-center gap-1">
+                  <Package className="w-3 h-3" /> Custom Fields
+                </p>
+                <Row label="Custom 1"    value={device.custom1} />
+                <Row label="Custom 2"    value={device.custom2} />
+                <Row label="Custom 3"    value={device.custom3} />
               </div>
             </div>
           )}
 
-          {/* ── CONTACTS ── */}
-          {tab === 'contacts' && (
-            <div className="text-center py-10">
-              <Users className="w-10 h-10 mx-auto mb-2 text-gray-300" />
-              <p className="text-sm text-gray-500 mb-3">{dataCountsMap.contacts ?? 0} contacts synced</p>
-              <Link to={`/devices/${id}/contacts`} className="btn-primary text-sm inline-flex">
-                View All Contacts
-              </Link>
-            </div>
-          )}
-
-          {/* ── CALL LOGS ── */}
-          {tab === 'calls' && (
-            <div className="text-center py-10">
-              <Phone className="w-10 h-10 mx-auto mb-2 text-gray-300" />
-              <p className="text-sm text-gray-500 mb-3">{dataCountsMap.callLogs ?? 0} call records</p>
-              <Link to={`/devices/${id}/calls`} className="btn-primary text-sm inline-flex">
-                View Call History
-              </Link>
-            </div>
-          )}
-
-          {/* ── APPS ── */}
+          {/* ══════ APPS TAB ══════ */}
           {tab === 'apps' && (
             installedApps.length === 0 ? (
               <div className="text-center py-10 text-gray-400">
@@ -294,34 +482,153 @@ export default function DeviceDetailPage() {
               </div>
             ) : (
               <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                <p className="text-xs text-gray-400 mb-2">{installedApps.length} apps reported</p>
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-white">
-                    <tr className="border-b border-gray-100 bg-gray-50">
-                      <th className="text-left px-3 py-2 font-medium text-gray-600">Package</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600">Version</th>
-                      <th className="text-left px-3 py-2 font-medium text-gray-600">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {installedApps.map((app: any) => (
-                      <tr key={app.id} className="hover:bg-gray-50">
-                        <td className="px-3 py-1.5 font-mono text-xs text-gray-700">{app.pkg}</td>
-                        <td className="px-3 py-1.5 text-gray-600">{app.version || '—'}</td>
-                        <td className="px-3 py-1.5">
-                          <span className={app.installed ? 'badge-green' : 'badge-red'}>
-                            {app.installed ? 'Installed' : 'Removed'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <p className="text-xs text-gray-400 mb-3 flex items-center gap-2">
+                  <Package className="w-3.5 h-3.5" /> {installedApps.length} apps reported
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {installedApps.map((app: any) => (
+                    <div key={app.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${app.installed ? 'bg-green-100' : 'bg-red-100'}`}>
+                        <Smartphone className={`w-4 h-4 ${app.installed ? 'text-green-600' : 'text-red-600'}`} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-gray-900 truncate">{app.pkg}</p>
+                        <p className="text-xs text-gray-500 truncate">v{app.version || '—'} {app.name ? `· ${app.name}` : ''}</p>
+                      </div>
+                      <span className={`text-xs ${app.installed ? 'badge-green' : 'badge-red'}`}>
+                        {app.installed ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )
           )}
 
-          {/* ── LOGS ── */}
+          {/* ══════ CONTACTS TAB ══════ */}
+          {tab === 'contacts' && (
+            contacts.length === 0 ? (
+              <div className="text-center py-10 text-gray-400">
+                <Users className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                <p className="text-sm">No contacts synced yet</p>
+                <p className="text-xs mt-1">Contacts will appear after the device syncs.</p>
+              </div>
+            ) : (
+              <div className="max-h-96 overflow-y-auto">
+                <p className="text-xs text-gray-400 mb-3">{contacts.length} contacts</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-white">
+                      <tr className="border-b border-gray-100 bg-gray-50">
+                        <th className="text-left px-3 py-2 font-medium text-gray-600">Name</th>
+                        <th className="text-left px-3 py-2 font-medium text-gray-600">Phone</th>
+                        <th className="text-left px-3 py-2 font-medium text-gray-600">Type</th>
+                        <th className="text-left px-3 py-2 font-medium text-gray-600">Email</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {contacts.map(c => (
+                        <tr key={c.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 font-medium text-gray-900">{c.name || '—'}</td>
+                          <td className="px-3 py-2">
+                            <span className="flex items-center gap-1 text-gray-600">
+                              <Phone className="w-3 h-3" /> {c.phone || '—'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className="badge-blue text-xs">{c.phoneType || '—'}</span>
+                          </td>
+                          <td className="px-3 py-2 text-gray-600">
+                            {c.email ? (
+                              <span className="flex items-center gap-1">
+                                <Mail className="w-3 h-3" /> {c.email}
+                              </span>
+                            ) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          )}
+
+          {/* ══════ CALL LOGS TAB ══════ */}
+          {tab === 'calls' && (
+            callLogs.length === 0 ? (
+              <div className="text-center py-10 text-gray-400">
+                <Phone className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                <p className="text-sm">No call logs synced yet</p>
+                <p className="text-xs mt-1">Call history will appear after the device syncs.</p>
+              </div>
+            ) : (
+              <div className="max-h-96 overflow-y-auto">
+                <p className="text-xs text-gray-400 mb-3">{callLogs.length} call records</p>
+                <div className="space-y-1">
+                  {callLogs.map(log => {
+                    const Icon = CALL_ICONS[log.callType] || Phone
+                    const color = CALL_COLORS[log.callType] || 'text-gray-600'
+                    return (
+                      <div key={log.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                        <Icon className={`w-5 h-5 ${color} flex-shrink-0`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-gray-900 text-sm">{log.contactName || log.phoneNumber || 'Unknown'}</span>
+                            <span className={CALL_BADGES[log.callType] || 'badge-gray'}>{log.callType}</span>
+                          </div>
+                          {log.phoneNumber && log.contactName && (
+                            <p className="text-xs text-gray-500">{log.phoneNumber}</p>
+                          )}
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-xs text-gray-500">{format(new Date(log.callDate), 'MMM dd, HH:mm')}</p>
+                          <p className="text-xs text-gray-400">{formatDuration(log.durationSec)}</p>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          )}
+
+          {/* ══════ NOTIFICATIONS TAB ══════ */}
+          {tab === 'notifications' && (
+            notifications.length === 0 ? (
+              <div className="text-center py-10 text-gray-400">
+                <Bell className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                <p className="text-sm">No notifications captured yet</p>
+                <p className="text-xs mt-1">Grant notification access on the device to capture notifications.</p>
+              </div>
+            ) : (
+              <div className="max-h-96 overflow-y-auto">
+                <p className="text-xs text-gray-400 mb-3">{notifications.length} notifications</p>
+                <div className="space-y-2">
+                  {notifications.map(n => (
+                    <div key={n.id} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-50">
+                      <div className="w-8 h-8 bg-primary-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <Bell className="w-4 h-4 text-primary-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium text-gray-900">{n.appName || n.packageName}</span>
+                          <span className="badge-gray text-xs">{n.packageName}</span>
+                        </div>
+                        {n.title && <p className="text-sm font-medium text-gray-800 mt-0.5">{n.title}</p>}
+                        {n.text && <p className="text-xs text-gray-600 mt-0.5 line-clamp-2">{n.text}</p>}
+                        <p className="text-xs text-gray-400 mt-1">
+                          {format(new Date(n.receivedAt), 'MMM dd, yyyy HH:mm:ss')}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          )}
+
+          {/* ══════ LOGS TAB ══════ */}
           {tab === 'logs' && (
             logs.length === 0 ? (
               <div className="text-center py-10 text-gray-400">
@@ -333,7 +640,7 @@ export default function DeviceDetailPage() {
                 {logs.map(log => {
                   const sev = SEV[log.severity] ?? { label: String(log.severity), cls: 'badge-gray' }
                   return (
-                    <div key={log.id} className="flex gap-2 py-1 border-b border-gray-50">
+                    <div key={log.id} className="flex gap-2 py-1 border-b border-gray-50 hover:bg-gray-50 px-1 rounded">
                       <span className="text-gray-400 flex-shrink-0 w-32">
                         {format(new Date(log.logTime), 'MM-dd HH:mm:ss')}
                       </span>
@@ -347,35 +654,64 @@ export default function DeviceDetailPage() {
             )
           )}
 
-          {/* ── LOCATIONS ── */}
+          {/* ══════ LOCATIONS TAB (LIVE MAP) ══════ */}
           {tab === 'locations' && (
-            locations.length === 0 ? (
-              <div className="text-center py-10 text-gray-400">
-                <MapPin className="w-10 h-10 mx-auto mb-2 opacity-40" />
-                <p className="text-sm">No location history</p>
-              </div>
-            ) : (
-              <div className="max-h-96 overflow-y-auto">
-                <p className="text-xs text-gray-400 mb-2">{locations.length} location records</p>
-                <div className="space-y-0.5">
-                  {locations.map(loc => (
-                    <div key={loc.id} className="flex items-center gap-4 py-1.5 border-b border-gray-50 text-sm">
-                      <span className="text-gray-400 text-xs w-40 flex-shrink-0">
-                        {format(new Date(loc.ts), 'yyyy-MM-dd HH:mm:ss')}
-                      </span>
-                      <span className="text-gray-700 font-mono text-xs">
-                        {loc.lat.toFixed(6)}, {loc.lon.toFixed(6)}
-                      </span>
-                      <a href={`https://maps.google.com/?q=${loc.lat},${loc.lon}`}
-                        target="_blank" rel="noreferrer"
-                        className="text-primary-600 hover:underline text-xs ml-auto flex-shrink-0 flex items-center gap-1">
-                        <MapPin className="w-3 h-3" /> Map
-                      </a>
-                    </div>
-                  ))}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <Navigation className="w-4 h-4 text-primary-600" />
+                  <p className="text-xs text-gray-400">
+                    {locations.length > 0
+                      ? `${locations.length} location records — latest: ${format(new Date(locations[0].ts), 'MMM dd, yyyy HH:mm:ss')}`
+                      : 'No location data yet'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center gap-1 text-xs text-gray-500">
+                    <span className="w-2.5 h-2.5 bg-red-500 rounded-full inline-block animate-pulse" />
+                    Live
+                  </span>
+                  <button onClick={() => refetchLocs()} className="btn-secondary text-xs p-1.5">
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
-            )
+
+              {locations.length === 0 ? (
+                <div className="text-center py-10 text-gray-400">
+                  <MapPin className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                  <p className="font-medium">No location history</p>
+                  <p className="text-xs mt-1">Enable GPS on the device and wait for location updates.</p>
+                </div>
+              ) : (
+                <LocationMap locations={locations} liveLat={device.lat} liveLon={device.lon} />
+              )}
+
+              {locations.length > 0 && (
+                <>
+                  <p className="text-xs font-medium text-gray-500 mt-2">Recent Location History</p>
+                  <div className="max-h-48 overflow-y-auto space-y-1">
+                    {locations.slice(0, 20).map((loc, i) => (
+                      <div key={loc.id}
+                        className="flex items-center gap-3 py-1.5 px-2 rounded hover:bg-gray-50 text-sm">
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${i === 0 ? 'bg-red-500' : 'bg-blue-400'}`} />
+                        <span className="text-gray-400 text-xs w-36 flex-shrink-0">
+                          {format(new Date(loc.ts), 'yyyy-MM-dd HH:mm:ss')}
+                        </span>
+                        <span className="text-gray-700 font-mono text-xs">
+                          {loc.lat.toFixed(6)}, {loc.lon.toFixed(6)}
+                        </span>
+                        <a href={`https://maps.google.com/?q=${loc.lat},${loc.lon}`}
+                          target="_blank" rel="noreferrer"
+                          className="text-primary-600 hover:underline text-xs ml-auto flex-shrink-0 flex items-center gap-1">
+                          <MapPin className="w-3 h-3" /> Map
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           )}
 
         </div>
