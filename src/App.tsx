@@ -11,6 +11,9 @@ import ApplicationsPage from './pages/ApplicationsPage'
 import GroupsPage       from './pages/GroupsPage'
 import UsersPage        from './pages/UsersPage'
 import MessagingPage    from './pages/MessagingPage'
+import ContactsPage     from './pages/ContactsPage'
+import CallLogsPage     from './pages/CallLogsPage'
+import NotificationsPage from './pages/NotificationsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth()
@@ -36,6 +39,9 @@ function AppRoutes() {
         <Route path="groups"     element={<GroupsPage />} />
         <Route path="messaging"  element={<MessagingPage />} />
         <Route path="users"      element={<UsersPage />} />
+        <Route path="devices/:id/contacts" element={<ContactsPage />} />
+        <Route path="devices/:id/calls"    element={<CallLogsPage />} />
+        <Route path="devices/:id/notifications" element={<NotificationsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

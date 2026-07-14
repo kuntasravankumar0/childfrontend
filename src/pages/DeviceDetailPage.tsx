@@ -4,7 +4,7 @@ import api from '../lib/api'
 import { Device, Configuration, DeviceLog, DeviceLocation } from '../types'
 import {
   ArrowLeft, Battery, Wifi, MapPin, RefreshCw,
-  Bell, Terminal, Info, Package
+  Bell, Terminal, Info, Package, Users, Phone
 } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -18,7 +18,7 @@ const SEV: Record<number, { label: string; cls: string }> = {
   5: { label: 'VERBOSE', cls: 'badge-gray'   },
 }
 
-type Tab = 'info' | 'apps' | 'logs' | 'locations'
+type Tab = 'info' | 'apps' | 'contacts' | 'calls' | 'logs' | 'locations'
 
 function statusBadge(status: string) {
   const m: Record<string, string> = {
@@ -70,6 +70,12 @@ export default function DeviceDetailPage() {
     enabled: tab === 'apps',
   })
 
+  const { data: countsRes } = useQuery({
+    queryKey: ['device-data-counts', id],
+    queryFn: () => api.get(`/devices/${id}/data/counts`),
+    refetchInterval: 30_000,
+  })
+
   const updateMutation = useMutation({
     mutationFn: (body: object) => api.put(`/devices/${id}`, body),
     onSuccess: () => {
@@ -89,6 +95,7 @@ export default function DeviceDetailPage() {
   const logs: DeviceLog[]        = logsRes?.data?.data    ?? []
   const locations: DeviceLocation[] = locsRes?.data?.data ?? []
   const installedApps: any[]    = appsRes?.data?.data     ?? []
+  const dataCountsMap: Record<string, number> = countsRes?.data?.data ?? {}
 
   useEffect(() => {
     if (device?.configId) setConfigId(String(device.configId))
@@ -104,6 +111,8 @@ export default function DeviceDetailPage() {
   const TABS = [
     { key: 'info'      as Tab, label: 'Info',      icon: Info },
     { key: 'apps'      as Tab, label: `Apps (${installedApps.length})`, icon: Package },
+    { key: 'contacts'  as Tab, label: `Contacts (${dataCountsMap.contacts ?? 0})`, icon: Users },
+    { key: 'calls'     as Tab, label: `Call Logs (${dataCountsMap.callLogs ?? 0})`, icon: Phone },
     { key: 'logs'      as Tab, label: 'Logs',      icon: Terminal },
     { key: 'locations' as Tab, label: 'Locations', icon: MapPin },
   ]
@@ -251,6 +260,28 @@ export default function DeviceDetailPage() {
                   </a>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* ── CONTACTS ── */}
+          {tab === 'contacts' && (
+            <div className="text-center py-10">
+              <Users className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+              <p className="text-sm text-gray-500 mb-3">{dataCountsMap.contacts ?? 0} contacts synced</p>
+              <Link to={`/devices/${id}/contacts`} className="btn-primary text-sm inline-flex">
+                View All Contacts
+              </Link>
+            </div>
+          )}
+
+          {/* ── CALL LOGS ── */}
+          {tab === 'calls' && (
+            <div className="text-center py-10">
+              <Phone className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+              <p className="text-sm text-gray-500 mb-3">{dataCountsMap.callLogs ?? 0} call records</p>
+              <Link to={`/devices/${id}/calls`} className="btn-primary text-sm inline-flex">
+                View Call History
+              </Link>
             </div>
           )}
 

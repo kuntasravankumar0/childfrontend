@@ -155,6 +155,45 @@ export interface DeviceStats {
   pending: number
 }
 
+export interface DeviceContact {
+  id: number
+  deviceId: number
+  name?: string
+  phone?: string
+  phoneType?: string
+  email?: string
+  rawContactId?: string
+  createdAt: string
+}
+
+export interface CallLogItem {
+  id: number
+  deviceId: number
+  phoneNumber?: string
+  callType: 'INCOMING' | 'OUTGOING' | 'MISSED' | 'REJECTED' | 'BLOCKED'
+  durationSec: number
+  callDate: number
+  contactName?: string
+  createdAt: string
+}
+
+export interface DeviceNotificationItem {
+  id: number
+  deviceId: number
+  packageName?: string
+  appName?: string
+  title?: string
+  text?: string
+  receivedAt: number
+  createdAt: string
+}
+
+export interface DataCounts {
+  contacts: number
+  callLogs: number
+  notifications: number
+}
+
 export interface PagedResult<T> {
   devices: T[]
   total: number
