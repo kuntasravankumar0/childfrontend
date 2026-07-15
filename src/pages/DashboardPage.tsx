@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '../lib/api'
 import { Device } from '../types'
-import { Smartphone, Wifi, WifiOff, Clock, RefreshCw, Settings2, Package, Users } from 'lucide-react'
+import { Smartphone, Wifi, WifiOff, Clock, RefreshCw, Settings2, MessageSquare } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { Link } from 'react-router-dom'
 import {
@@ -88,10 +88,9 @@ export default function DashboardPage() {
             <StatCard label="Offline"         value={devices.offline ?? 0} icon={WifiOff}      color="bg-red-500"     />
             <StatCard label="Pending"         value={devices.pending ?? 0} icon={Clock}        color="bg-yellow-500"  />
           </div>
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
             <StatCard label="Configurations" value={summary?.configurations ?? 0} icon={Settings2} color="bg-purple-500" />
-            <StatCard label="Applications"   value={summary?.applications   ?? 0} icon={Package}   color="bg-blue-500"   />
-            <StatCard label="Groups"         value={summary?.groups         ?? 0} icon={Users}      color="bg-orange-500" />
+            <StatCard label="Pending Messages" value={summary?.pendingMessages ?? 0} icon={MessageSquare} color="bg-blue-500" />
           </div>
         </>
       )}

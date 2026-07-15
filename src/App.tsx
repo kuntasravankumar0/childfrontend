@@ -7,8 +7,6 @@ import DevicesPage      from './pages/DevicesPage'
 import DeviceDetailPage from './pages/DeviceDetailPage'
 import ConfigurationsPage from './pages/ConfigurationsPage'
 import ConfigDetailPage from './pages/ConfigDetailPage'
-import ApplicationsPage from './pages/ApplicationsPage'
-import GroupsPage       from './pages/GroupsPage'
 import UsersPage        from './pages/UsersPage'
 import MessagingPage    from './pages/MessagingPage'
 import ContactsPage     from './pages/ContactsPage'
@@ -35,8 +33,6 @@ function AppRoutes() {
         <Route path="devices/:id" element={<DeviceDetailPage />} />
         <Route path="configurations" element={<ConfigurationsPage />} />
         <Route path="configurations/:id" element={<ConfigDetailPage />} />
-        <Route path="applications" element={<ApplicationsPage />} />
-        <Route path="groups"     element={<GroupsPage />} />
         <Route path="messaging"  element={<MessagingPage />} />
         <Route path="users"      element={<UsersPage />} />
         <Route path="devices/:id/contacts" element={<ContactsPage />} />
