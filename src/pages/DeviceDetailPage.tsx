@@ -1,16 +1,19 @@
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useStorageQuery } from '../hooks/useStorageQuery'
 import api from '../lib/api'
 import { Device, Configuration, DeviceLog, DeviceLocation, DeviceContact, DeviceNotificationItem, CallLogItem } from '../types'
 import {
   ArrowLeft, Battery, Wifi, MapPin, RefreshCw,
   Bell, Terminal, Info, Package, Users, Phone, PhoneIncoming,
-  PhoneOutgoing, PhoneMissed, Mail, Smartphone, Activity, Navigation
+  PhoneOutgoing, PhoneMissed, Mail, Smartphone, Activity, Navigation,
+  Search, X
 } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 import toast from 'react-hot-toast'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import L from 'leaflet'
+import ErrorBoundary from '../components/ErrorBoundary'
 
 // ─── Severity map ──────────────────────────────────────────────────────────
 const SEV: Record<number, { label: string; cls: string }> = {
@@ -200,12 +203,19 @@ export default function DeviceDetailPage() {
   const [tab, setTab] = useState<Tab>('info')
   const [configId, setConfigId] = useState('')
   const [pushType, setPushType] = useState('configUpdated')
+  // Calls tab search/filter state
+  const [callSearch, setCallSearch] = useState('')
+  const [callTypeFilter, setCallTypeFilter] = useState('ALL')
+  const [callDateFrom, setCallDateFrom] = useState('')
+  const [callDateTo, setCallDateTo] = useState('')
+  // Notifications pagination
+  const [notifPage, setNotifPage] = useState(0)
 
   // Main device query
   const { data: deviceRes, isLoading } = useQuery({
     queryKey: ['device', id],
     queryFn: () => api.get(`/devices/${id}`),
-    refetchInterval: 15_000, // Refresh every 15s for live data
+    refetchInterval: 60_000, // Refresh every 60s to reduce server load
   })
 
   const { data: configsRes } = useQuery({
@@ -213,47 +223,63 @@ export default function DeviceDetailPage() {
     queryFn: () => api.get('/configurations'),
   })
 
-  const { data: logsRes } = useQuery({
-    queryKey: ['device-logs', id],
-    queryFn: () => api.get(`/devices/${id}/logs?page=0&size=200`),
+  const { data: logsRes } = useStorageQuery({
+    queryKey: ['device-logs', id!],
+    fetcher: () => api.get(`/devices/${id}/logs?page=0&size=200`),
     enabled: tab === 'logs',
+    staleSeconds: 60,
   })
 
   const { data: locsRes, refetch: refetchLocs } = useQuery({
     queryKey: ['device-locations', id],
     queryFn: () => api.get(`/devices/${id}/locations`),
     enabled: tab === 'locations',
-    refetchInterval: tab === 'locations' ? 10_000 : false, // Live poll every 10s
+    refetchInterval: tab === 'locations' ? 60_000 : false, // Live poll every 60s to reduce load
   })
 
-  const { data: appsRes } = useQuery({
-    queryKey: ['device-apps', id],
-    queryFn: () => api.get(`/devices/${id}/apps`),
+  const { data: appsRes } = useStorageQuery({
+    queryKey: ['device-apps', id!],
+    fetcher: () => api.get(`/devices/${id}/apps`),
     enabled: tab === 'apps',
+    staleSeconds: 120,
   })
 
-  const { data: contactsRes } = useQuery({
-    queryKey: ['device-contacts', id],
-    queryFn: () => api.get(`/devices/${id}/data/contacts`),
+  // Contacts with pagination
+  const [contactsPage, setContactsPage] = useState(0)
+  const { data: contactsRes } = useStorageQuery({
+    queryKey: ['device-contacts', id!, String(contactsPage)],
+    fetcher: () => api.get(`/devices/${id}/data/contacts?page=${contactsPage}&size=200`),
     enabled: tab === 'contacts',
+    staleSeconds: 120,
   })
 
-  const { data: callsRes } = useQuery({
-    queryKey: ['device-calls', id],
-    queryFn: () => api.get(`/devices/${id}/data/calls`),
+  // Calls with pagination + server-side search/filter
+  const [callsPage, setCallsPage] = useState(0)
+  const { data: callsRes } = useStorageQuery({
+    queryKey: ['device-calls', id!, String(callsPage), callSearch, callTypeFilter, callDateFrom, callDateTo],
+    fetcher: () => {
+      const params = new URLSearchParams({ page: String(callsPage), size: '100' })
+      if (callSearch) params.set('search', callSearch)
+      if (callTypeFilter !== 'ALL') params.set('type', callTypeFilter)
+      if (callDateFrom) params.set('dateFrom', String(new Date(callDateFrom).getTime()))
+      if (callDateTo) params.set('dateTo', String(new Date(callDateTo).getTime() + 86400000))
+      return api.get(`/devices/${id}/data/calls?${params}`)
+    },
     enabled: tab === 'calls',
+    staleSeconds: 120,
   })
 
-  const { data: notifsRes } = useQuery({
-    queryKey: ['device-notifications', id],
-    queryFn: () => api.get(`/devices/${id}/data/notifications`),
+  const { data: notifsRes } = useStorageQuery({
+    queryKey: ['device-notifications', id!, String(notifPage)],
+    fetcher: () => api.get(`/devices/${id}/data/notifications?page=${notifPage}&size=100`),
     enabled: tab === 'notifications',
+    staleSeconds: 120,
   })
 
-  const { data: countsRes } = useQuery({
-    queryKey: ['device-data-counts', id],
-    queryFn: () => api.get(`/devices/${id}/data/counts`),
-    refetchInterval: 30_000,
+  const { data: countsRes } = useStorageQuery({
+    queryKey: ['device-data-counts', id!],
+    fetcher: () => api.get(`/devices/${id}/data/counts`),
+    staleSeconds: 300,
   })
 
   const updateMutation = useMutation({
@@ -273,13 +299,20 @@ export default function DeviceDetailPage() {
 
   const device: Device = deviceRes?.data?.data
   const configs: Configuration[] = configsRes?.data?.data ?? []
-  const logs: DeviceLog[] = logsRes?.data?.data ?? []
+  const logs: DeviceLog[] = (logsRes ?? []) as DeviceLog[]
   const locations: DeviceLocation[] = locsRes?.data?.data ?? []
-  const installedApps: any[] = appsRes?.data?.data ?? []
-  const contacts: DeviceContact[] = contactsRes?.data?.data ?? []
-  const callLogs: CallLogItem[] = callsRes?.data?.data ?? []
-  const notifications: DeviceNotificationItem[] = notifsRes?.data?.data ?? []
-  const dataCountsMap: Record<string, number> = countsRes?.data?.data ?? {}
+  const installedApps: any[] = (appsRes ?? []) as any[]
+  // Defensive: items could be missing from unexpected API response shapes
+  const contactsData = (contactsRes ?? { items: [], total: 0 }) as { items?: DeviceContact[]; total?: number }
+  const contacts = contactsData.items ?? []
+  const contactsTotal = contactsData.total ?? 0
+
+  const callsData = (callsRes ?? { items: [], total: 0, page: 0, pages: 0 }) as { items?: CallLogItem[]; total?: number; page?: number; pages?: number }
+  const callLogs = callsData.items ?? []
+  const callsTotal = callsData.total ?? 0
+  const notifsData = (notifsRes ?? { items: [], total: 0, page: 0, pages: 0 }) as { items?: DeviceNotificationItem[]; total?: number; page?: number; pages?: number }
+  const notifications = notifsData.items ?? []
+  const dataCountsMap: Record<string, number> = (countsRes ?? {}) as Record<string, number>
 
   useEffect(() => {
     if (device?.configId) setConfigId(String(device.configId))
@@ -296,7 +329,7 @@ export default function DeviceDetailPage() {
     { key: 'info'          as Tab, label: 'Info',          icon: Info },
     { key: 'apps'          as Tab, label: `Apps (${installedApps.length})`,      icon: Package },
     { key: 'contacts'      as Tab, label: `Contacts (${dataCountsMap.contacts ?? 0})`, icon: Users },
-    { key: 'calls'         as Tab, label: `Calls (${dataCountsMap.callLogs ?? 0})`,    icon: Phone },
+    { key: 'calls'         as Tab, label: `Calls (${callsTotal ?? dataCountsMap.callLogs ?? 0})`,    icon: Phone },
     { key: 'notifications' as Tab, label: `Notifs (${dataCountsMap.notifications ?? 0})`, icon: Bell },
     { key: 'logs'          as Tab, label: 'Logs',          icon: Terminal },
     { key: 'locations'     as Tab, label: 'Locations',     icon: Navigation },
@@ -448,7 +481,7 @@ export default function DeviceDetailPage() {
                 <Row label="Phone 2"     value={device.phone2} />
                 <Row label="ICCID"       value={device.iccid} />
                 <Row label="ICCID 2"     value={device.iccid2} />
-                <Row label="IMSI"        value={device.imsi} />
+                <Row label="IMSI"        value={device.imsi || '—'} />
                 <Row label="IP Address"  value={device.ipAddress} />
                 <Row label="External IP" value={device.externalIp} />
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 mt-4 flex items-center gap-1">
@@ -505,127 +538,231 @@ export default function DeviceDetailPage() {
             )
           )}
 
-          {/* ══════ CONTACTS TAB ══════ */}
+          {/* ══════ CONTACTS TAB (with ErrorBoundary) ══════ */}
           {tab === 'contacts' && (
-            contacts.length === 0 ? (
-              <div className="text-center py-10 text-gray-400">
-                <Users className="w-10 h-10 mx-auto mb-2 opacity-40" />
-                <p className="text-sm">No contacts synced yet</p>
-                <p className="text-xs mt-1">Contacts will appear after the device syncs.</p>
-              </div>
-            ) : (
-              <div className="max-h-96 overflow-y-auto">
-                <p className="text-xs text-gray-400 mb-3">{contacts.length} contacts</p>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-white">
-                      <tr className="border-b border-gray-100 bg-gray-50">
-                        <th className="text-left px-3 py-2 font-medium text-gray-600">Name</th>
-                        <th className="text-left px-3 py-2 font-medium text-gray-600">Phone</th>
-                        <th className="text-left px-3 py-2 font-medium text-gray-600">Type</th>
-                        <th className="text-left px-3 py-2 font-medium text-gray-600">Email</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {contacts.map(c => (
-                        <tr key={c.id} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 font-medium text-gray-900">{c.name || '—'}</td>
-                          <td className="px-3 py-2">
-                            <span className="flex items-center gap-1 text-gray-600">
-                              <Phone className="w-3 h-3" /> {c.phone || '—'}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2">
-                            <span className="badge-blue text-xs">{c.phoneType || '—'}</span>
-                          </td>
-                          <td className="px-3 py-2 text-gray-600">
-                            {c.email ? (
-                              <span className="flex items-center gap-1">
-                                <Mail className="w-3 h-3" /> {c.email}
-                              </span>
-                            ) : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            <ErrorBoundary>
+              {contacts.length === 0 ? (
+                <div className="text-center py-10 text-gray-400">
+                  <Users className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                  <p className="text-sm">No contacts synced yet</p>
+                  <p className="text-xs mt-1">Contacts will appear after the device syncs.</p>
                 </div>
-              </div>
-            )
+              ) : (
+                <div className="max-h-96 overflow-y-auto">
+                  <p className="text-xs text-gray-400 mb-3">{contacts.length} contacts</p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-white">
+                        <tr className="border-b border-gray-100 bg-gray-50">
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Name</th>
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Phone</th>
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Type</th>
+                          <th className="text-left px-3 py-2 font-medium text-gray-600">Email</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {contacts.map(c => (
+                          <tr key={c.id} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900">{c.name || '—'}</td>
+                            <td className="px-3 py-2">
+                              <span className="flex items-center gap-1 text-gray-600">
+                                <Phone className="w-3 h-3" /> {c.phone || '—'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className="badge-blue text-xs">{c.phoneType || '—'}</span>
+                            </td>
+                            <td className="px-3 py-2 text-gray-600">
+                              {c.email ? (
+                                <span className="flex items-center gap-1">
+                                  <Mail className="w-3 h-3" /> {c.email}
+                                </span>
+                              ) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </ErrorBoundary>
           )}
 
-          {/* ══════ CALL LOGS TAB ══════ */}
+          {/* ══════ CALL LOGS TAB (with ErrorBoundary) ══════ */}
           {tab === 'calls' && (
-            callLogs.length === 0 ? (
-              <div className="text-center py-10 text-gray-400">
-                <Phone className="w-10 h-10 mx-auto mb-2 opacity-40" />
-                <p className="text-sm">No call logs synced yet</p>
-                <p className="text-xs mt-1">Call history will appear after the device syncs.</p>
-              </div>
-            ) : (
-              <div className="max-h-96 overflow-y-auto">
-                <p className="text-xs text-gray-400 mb-3">{callLogs.length} call records</p>
-                <div className="space-y-1">
-                  {callLogs.map(log => {
-                    const Icon = CALL_ICONS[log.callType] || Phone
-                    const color = CALL_COLORS[log.callType] || 'text-gray-600'
-                    return (
-                      <div key={log.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors">
-                        <Icon className={`w-5 h-5 ${color} flex-shrink-0`} />
+            <ErrorBoundary>
+              <>
+                {/* ── Search / Filter Bar ── */}
+                <div className="flex flex-wrap items-center gap-2 mb-4 p-3 bg-gray-50 rounded-lg">
+                  <Search className="w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search by phone number..."
+                    value={callSearch}
+                    onChange={e => { setCallSearch(e.target.value); setCallsPage(0); }}
+                    className="input flex-1 min-w-[160px] text-sm"
+                  />
+                  <select
+                    value={callTypeFilter}
+                    onChange={e => { setCallTypeFilter(e.target.value); setCallsPage(0); }}
+                    className="input w-auto text-sm"
+                  >
+                    <option value="ALL">All Types</option>
+                    <option value="INCOMING">Incoming</option>
+                    <option value="OUTGOING">Outgoing</option>
+                    <option value="MISSED">Missed</option>
+                    <option value="REJECTED">Rejected</option>
+                  </select>
+                  <input
+                    type="date"
+                    value={callDateFrom}
+                    onChange={e => { setCallDateFrom(e.target.value); setCallsPage(0); }}
+                    className="input w-auto text-sm"
+                    title="From date"
+                  />
+                  <span className="text-xs text-gray-400">→</span>
+                  <input
+                    type="date"
+                    value={callDateTo}
+                    onChange={e => { setCallDateTo(e.target.value); setCallsPage(0); }}
+                    className="input w-auto text-sm"
+                    title="To date"
+                  />
+                  {(callSearch || callTypeFilter !== 'ALL' || callDateFrom || callDateTo) && (
+                    <button
+                      onClick={() => { setCallSearch(''); setCallTypeFilter('ALL'); setCallDateFrom(''); setCallDateTo(''); setCallsPage(0); }}
+                      className="text-xs text-primary-600 hover:underline flex items-center gap-1"
+                    >
+                      <X className="w-3 h-3" /> Clear
+                    </button>
+                  )}
+                </div>
+
+                {(callsData as any)?.total > 0 && (
+                  <p className="text-xs text-gray-400 mb-3">
+                    {callsTotal.toLocaleString()} call records — Page {callsPage + 1} of {callsData.pages || 1}
+                  </p>
+                )}
+
+                {callLogs.length === 0 ? (
+                  <div className="text-center py-10 text-gray-400">
+                    <Phone className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                    <p className="text-sm">{(callSearch || callTypeFilter !== 'ALL' || callDateFrom || callDateTo) ? 'No calls match your filters' : 'No call logs synced yet'}</p>
+                    <p className="text-xs mt-1">Call history will appear after the device syncs.</p>
+                  </div>
+                ) : (
+                  <div className="max-h-96 overflow-y-auto">
+                    <div className="space-y-1">
+                      {callLogs.map(log => {
+                        const Icon = CALL_ICONS[log.callType] || Phone
+                        const color = CALL_COLORS[log.callType] || 'text-gray-600'
+                        return (
+                          <div key={log.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                            <Icon className={`w-5 h-5 ${color} flex-shrink-0`} />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium text-gray-900 text-sm">{log.contactName || log.phoneNumber || 'Unknown'}</span>
+                                <span className={CALL_BADGES[log.callType] || 'badge-gray'}>{log.callType}</span>
+                              </div>
+                              {log.phoneNumber && log.contactName && (
+                                <p className="text-xs text-gray-500">{log.phoneNumber}</p>
+                              )}
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <p className="text-xs text-gray-500">{format(new Date(log.callDate), 'MMM dd, HH:mm')}</p>
+                              <p className="text-xs text-gray-400">{formatDuration(log.durationSec)}</p>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {/* ── Pagination ── */}
+                    <div className="flex items-center justify-center gap-2 p-4 border-t border-gray-50 mt-3">
+                      <button
+                        onClick={() => setCallsPage(p => Math.max(0, p - 1))}
+                        disabled={callsPage === 0}
+                        className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-30"
+                      >
+                        ← Previous
+                      </button>
+                      <span className="text-xs text-gray-500">
+                        Page {callsPage + 1} of {callsData.pages || 1}
+                      </span>
+                      <button
+                        onClick={() => setCallsPage(p => p + 1)}
+                        disabled={callsPage >= (callsData.pages || 1) - 1}
+                        className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-30"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            </ErrorBoundary>
+          )}
+
+          {/* ══════ NOTIFICATIONS TAB (PAGINATED) ══════ */}
+          {tab === 'notifications' && (
+            <>
+              {(notifsData.total ?? 0) > 0 && (
+                <p className="text-xs text-gray-400 mb-3">
+                  {(notifsData.total ?? 0).toLocaleString()} notifications — Page {notifPage + 1} of {notifsData.pages || 1}
+                </p>
+              )}
+
+              {notifications.length === 0 ? (
+                <div className="text-center py-10 text-gray-400">
+                  <Bell className="w-10 h-10 mx-auto mb-2 opacity-40" />
+                  <p className="text-sm">No notifications captured yet</p>
+                  <p className="text-xs mt-1">Grant notification access on the device to capture notifications.</p>
+                </div>
+              ) : (
+                <div className="max-h-96 overflow-y-auto">
+                  <div className="space-y-2">
+                    {notifications.map(n => (
+                      <div key={n.id} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-50">
+                        <div className="w-8 h-8 bg-primary-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                          <Bell className="w-4 h-4 text-primary-600" />
+                        </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-medium text-gray-900 text-sm">{log.contactName || log.phoneNumber || 'Unknown'}</span>
-                            <span className={CALL_BADGES[log.callType] || 'badge-gray'}>{log.callType}</span>
+                            <span className="text-sm font-medium text-gray-900">{n.appName || n.packageName}</span>
+                            <span className="badge-gray text-xs">{n.packageName}</span>
                           </div>
-                          {log.phoneNumber && log.contactName && (
-                            <p className="text-xs text-gray-500">{log.phoneNumber}</p>
-                          )}
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <p className="text-xs text-gray-500">{format(new Date(log.callDate), 'MMM dd, HH:mm')}</p>
-                          <p className="text-xs text-gray-400">{formatDuration(log.durationSec)}</p>
+                          {n.title && <p className="text-sm font-medium text-gray-800 mt-0.5">{n.title}</p>}
+                          {n.text && <p className="text-xs text-gray-600 mt-0.5 line-clamp-2">{n.text}</p>}
+                          <p className="text-xs text-gray-400 mt-1">
+                            {format(new Date(n.receivedAt), 'MMM dd, yyyy HH:mm:ss')}
+                          </p>
                         </div>
                       </div>
-                    )
-                  })}
+                    ))}
+                  </div>
+                  {/* ── Pagination ── */}
+                  <div className="flex items-center justify-center gap-2 p-4 border-t border-gray-50 mt-3">
+                    <button
+                      onClick={() => setNotifPage(p => Math.max(0, p - 1))}
+                      disabled={notifPage === 0}
+                      className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-30"
+                    >
+                      ← Previous
+                    </button>
+                    <span className="text-xs text-gray-500">
+                      Page {notifPage + 1} of {notifsData.pages || 1}
+                    </span>
+                    <button
+                      onClick={() => setNotifPage(p => p + 1)}
+                      disabled={notifPage >= (notifsData.pages || 1) - 1}
+                      className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-30"
+                    >
+                      Next →
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )
-          )}
-
-          {/* ══════ NOTIFICATIONS TAB ══════ */}
-          {tab === 'notifications' && (
-            notifications.length === 0 ? (
-              <div className="text-center py-10 text-gray-400">
-                <Bell className="w-10 h-10 mx-auto mb-2 opacity-40" />
-                <p className="text-sm">No notifications captured yet</p>
-                <p className="text-xs mt-1">Grant notification access on the device to capture notifications.</p>
-              </div>
-            ) : (
-              <div className="max-h-96 overflow-y-auto">
-                <p className="text-xs text-gray-400 mb-3">{notifications.length} notifications</p>
-                <div className="space-y-2">
-                  {notifications.map(n => (
-                    <div key={n.id} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-50">
-                      <div className="w-8 h-8 bg-primary-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
-                        <Bell className="w-4 h-4 text-primary-600" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium text-gray-900">{n.appName || n.packageName}</span>
-                          <span className="badge-gray text-xs">{n.packageName}</span>
-                        </div>
-                        {n.title && <p className="text-sm font-medium text-gray-800 mt-0.5">{n.title}</p>}
-                        {n.text && <p className="text-xs text-gray-600 mt-0.5 line-clamp-2">{n.text}</p>}
-                        <p className="text-xs text-gray-400 mt-1">
-                          {format(new Date(n.receivedAt), 'MMM dd, yyyy HH:mm:ss')}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
+              )}
+            </>
           )}
 
           {/* ══════ LOGS TAB ══════ */}

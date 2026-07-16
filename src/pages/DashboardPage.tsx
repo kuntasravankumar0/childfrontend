@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
+import { useStorageQuery } from '../hooks/useStorageQuery'
 import api from '../lib/api'
 import { Device } from '../types'
 import { Smartphone, Wifi, WifiOff, Clock, RefreshCw, Settings2, MessageSquare } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { Link } from 'react-router-dom'
 import {
-  PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer,
-  AreaChart, Area, XAxis, YAxis, CartesianGrid
+  PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer
 } from 'recharts'
 
 const PIE_COLORS = ['#22c55e', '#ef4444', '#f59e0b', '#6b7280']
@@ -40,18 +40,18 @@ export default function DashboardPage() {
   const { data: summaryRes, isLoading, refetch } = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: () => api.get('/dashboard/summary'),
-    refetchInterval: 30_000,
+    refetchInterval: 120_000,
   })
 
-  const { data: devicesRes } = useQuery({
+  const { data: devicesRes } = useStorageQuery({
     queryKey: ['devices-recent'],
-    queryFn: () => api.get('/devices?page=0&size=8'),
-    refetchInterval: 30_000,
+    fetcher: () => api.get('/devices?page=0&size=8'),
+    staleSeconds: 300,
   })
 
   const summary = summaryRes?.data?.data
   const devices = summary?.devices ?? {}
-  const recentDevices: Device[] = devicesRes?.data?.data?.devices ?? []
+  const recentDevices: Device[] = ((devicesRes as any)?.devices ?? []) as Device[]
 
   const pieData = summary ? [
     { name: 'Online',  value: devices.online  ?? 0 },
