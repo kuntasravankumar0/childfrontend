@@ -101,11 +101,12 @@ export default function DevicesPage() {
   const total: number     = data?.data?.data?.total   ?? 0
   const pages: number     = data?.data?.data?.pages   ?? 1
 
-  // ── Fetch features for visible devices ─────────────────────────────
+  // ── Fetch features for visible devices + reset expanded on page change ──
   useEffect(() => {
+    setExpandedDevice(null) // Reset expanded device when list changes
     if (devices.length === 0) return
+
     const ids = devices.map(d => d.id)
-    
     api.post('/devices/features/batch', { ids })
       .then(res => {
         const raw = res.data?.data?.features ?? {}
