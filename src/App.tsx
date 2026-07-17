@@ -11,7 +11,6 @@ import UsersPage        from './pages/UsersPage'
 import BackgroundAgentMode from './pages/BackgroundAgentMode'
 import ContactsPage     from './pages/ContactsPage'
 import CallLogsPage     from './pages/CallLogsPage'
-import NotificationsPage from './pages/NotificationsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth()
@@ -38,7 +37,6 @@ function AppRoutes() {
         <Route path="users"      element={<UsersPage />} />
         <Route path="devices/:id/contacts" element={<ContactsPage />} />
         <Route path="devices/:id/calls"    element={<CallLogsPage />} />
-        <Route path="devices/:id/notifications" element={<NotificationsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

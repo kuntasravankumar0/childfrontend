@@ -2,10 +2,10 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useStorageQuery } from '../hooks/useStorageQuery'
 import api from '../lib/api'
-import { Device, Configuration, DeviceLog, DeviceLocation, DeviceContact, DeviceNotificationItem, CallLogItem, Geofence } from '../types'
+import { Device, Configuration, DeviceLog, DeviceLocation, DeviceContact, CallLogItem, Geofence } from '../types'
 import {
   ArrowLeft, Battery, Wifi, MapPin, RefreshCw,
-  Bell, Terminal, Info, Package, Users, Phone, PhoneIncoming,
+  Terminal, Info, Package, Users, Phone, PhoneIncoming,
   PhoneOutgoing, PhoneMissed, Mail, Smartphone, Activity, Navigation,
   Search, X, Camera, Mic, Circle, Plus, Trash2, ToggleLeft, ToggleRight,
   ExternalLink, Download
@@ -43,7 +43,7 @@ function formatDuration(sec: number): string {
 }
 
 // ─── Components ────────────────────────────────────────────────────────────
-type Tab = 'info' | 'apps' | 'contacts' | 'calls' | 'notifications' | 'logs' | 'locations' | 'geofences' | 'media'
+type Tab = 'info' | 'apps' | 'contacts' | 'calls' | 'logs' | 'locations' | 'geofences' | 'media'
 
 function statusBadge(status: string) {
   const m: Record<string, string> = {
@@ -218,7 +218,6 @@ export default function DeviceDetailPage() {
   const [callTypeFilter, setCallTypeFilter] = useState('ALL')
   const [callDateFrom, setCallDateFrom] = useState('')
   const [callDateTo, setCallDateTo] = useState('')
-  const [notifPage, setNotifPage] = useState(0)
   const [newGeofenceLat, setNewGeofenceLat] = useState<number | null>(null)
   const [newGeofenceLng, setNewGeofenceLng] = useState<number | null>(null)
 
@@ -279,12 +278,6 @@ export default function DeviceDetailPage() {
     enabled: tab === 'calls', staleSeconds: 120,
   })
 
-  const { data: notifsRes } = useStorageQuery({
-    queryKey: ['device-notifications', id!, String(notifPage)],
-    fetcher: () => api.get(`/devices/${id}/data/notifications?page=${notifPage}&size=100`),
-    enabled: tab === 'notifications', staleSeconds: 120,
-  })
-
   const { data: countsRes } = useStorageQuery({
     queryKey: ['device-data-counts', id!],
     fetcher: () => api.get(`/devices/${id}/data/counts`),
@@ -302,12 +295,6 @@ export default function DeviceDetailPage() {
     mutationFn: (body: object) => api.post(`/devices/${id}/push`, body),
     onSuccess: () => toast.success('Push queued'),
     onError: () => toast.error('Push failed'),
-  })
-
-  const deleteNotifMutation = useMutation({
-    mutationFn: (notifId: number) => api.delete(`/devices/${id}/data/notifications/${notifId}`),
-    onSuccess: () => { toast.success('Notification deleted'); qc.invalidateQueries({ queryKey: ['device-notifications', id] }); qc.invalidateQueries({ queryKey: ['device-data-counts', id] }) },
-    onError: () => toast.error('Failed to delete notification'),
   })
 
   // Geofence mutations
@@ -341,8 +328,6 @@ export default function DeviceDetailPage() {
   const callsData = (callsRes ?? { items: [], total: 0, page: 0, pages: 0 }) as { items?: CallLogItem[]; total?: number; page?: number; pages?: number }
   const callLogs = callsData.items ?? []
   const callsTotal = callsData.total ?? 0
-  const notifsData = (notifsRes ?? { items: [], total: 0, page: 0, pages: 0 }) as { items?: DeviceNotificationItem[]; total?: number; page?: number; pages?: number }
-  const notifications = notifsData.items ?? []
   const logs: DeviceLog[] = (logsRes ?? []) as DeviceLog[]
   const dataCountsMap: Record<string, number> = (countsRes ?? {}) as Record<string, number>
 
@@ -360,7 +345,6 @@ export default function DeviceDetailPage() {
     { key: 'apps'          as Tab, label: `Apps (${installedApps.length})`,      icon: Package },
     { key: 'contacts'      as Tab, label: `Contacts (${dataCountsMap.contacts ?? 0})`, icon: Users },
     { key: 'calls'         as Tab, label: `Calls (${callsTotal ?? dataCountsMap.callLogs ?? 0})`, icon: Phone },
-    { key: 'notifications' as Tab, label: `Notifs (${dataCountsMap.notifications ?? 0})`, icon: Bell },
     { key: 'logs'          as Tab, label: 'Logs',          icon: Terminal },
     { key: 'locations'     as Tab, label: 'Locations',     icon: Navigation },
     { key: 'geofences'     as Tab, label: `Geo (${geofences.length})`, icon: Circle },
@@ -476,7 +460,7 @@ export default function DeviceDetailPage() {
                 pushMutation.mutate({ messageType: pushType });
               }
             }} disabled={pushMutation.isPending} className="btn-primary text-sm">
-              <Bell className="w-4 h-4" /> Send
+              <RefreshCw className="w-4 h-4" /> Send
             </button>
           </div>
         </div>
@@ -663,37 +647,6 @@ export default function DeviceDetailPage() {
                 </div>
               )}
             </ErrorBoundary>
-          )}
-
-          {/* ══════ NOTIFICATIONS TAB ══════ */}
-          {tab === 'notifications' && (
-            <>
-              {(notifsData.total ?? 0) > 0 && <p className="text-xs text-gray-400 mb-3">{(notifsData.total ?? 0).toLocaleString()} notifications — Page {notifPage + 1} of {notifsData.pages || 1}</p>}
-              {notifications.length === 0 ? (
-                <div className="text-center py-10 text-gray-400"><Bell className="w-10 h-10 mx-auto mb-2 opacity-40" /><p className="text-sm">No notifications</p></div>
-              ) : (
-                <div className="max-h-96 overflow-y-auto">
-                  <div className="space-y-2">{notifications.map(n => (
-                    <div key={n.id} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors border border-gray-50 group">
-                      <div className="w-8 h-8 bg-primary-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"><Bell className="w-4 h-4 text-primary-600" /></div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-medium text-gray-900">{n.appName || n.packageName}</span><span className="badge-gray text-xs">{n.packageName}</span></div>
-                        {n.title && <p className="text-sm font-medium text-gray-800 mt-0.5">{n.title}</p>}
-                        {n.text && <p className="text-xs text-gray-600 mt-0.5 line-clamp-2">{n.text}</p>}
-                        <p className="text-xs text-gray-400 mt-1">{format(new Date(n.receivedAt), 'MMM dd, yyyy HH:mm:ss')}</p>
-                      </div>
-                      <button onClick={() => { if (window.confirm('Delete this notification?')) deleteNotifMutation.mutate(n.id) }} disabled={deleteNotifMutation.isPending}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-all flex-shrink-0 mt-1"><X className="w-4 h-4" /></button>
-                    </div>
-                  ))}</div>
-                  <div className="flex items-center justify-center gap-2 p-4 border-t border-gray-50 mt-3">
-                    <button onClick={() => setNotifPage(p => Math.max(0, p - 1))} disabled={notifPage === 0} className="btn-secondary text-xs px-3 py-1.5">← Previous</button>
-                    <span className="text-xs text-gray-500">Page {notifPage + 1} of {notifsData.pages || 1}</span>
-                    <button onClick={() => setNotifPage(p => p + 1)} disabled={notifPage >= (notifsData.pages || 1) - 1} className="btn-secondary text-xs px-3 py-1.5">Next →</button>
-                  </div>
-                </div>
-              )}
-            </>
           )}
 
           {/* ══════ LOGS TAB ══════ */}

@@ -47,6 +47,25 @@ export interface Device {
   createdAt: string
 }
 
+export interface DeviceFeatures {
+  gps: boolean
+  imei: boolean
+  networkInfo: boolean
+  battery: boolean
+  android: boolean
+  mdmMode: boolean
+  kioskMode: boolean
+  defaultLauncher: boolean
+  configAssigned: boolean
+  contacts: boolean
+  callLogs: boolean
+  installedApps: boolean
+  locationHistory: boolean
+  online: boolean
+  lastSync: boolean
+  pushCapable: boolean
+}
+
 export interface Configuration {
   id: number
   name: string
@@ -177,21 +196,9 @@ export interface CallLogItem {
   createdAt: string
 }
 
-export interface DeviceNotificationItem {
-  id: number
-  deviceId: number
-  packageName?: string
-  appName?: string
-  title?: string
-  text?: string
-  receivedAt: number
-  createdAt: string
-}
-
 export interface DataCounts {
   contacts: number
   callLogs: number
-  notifications: number
 }
 
 export interface PagedResult<T> {
