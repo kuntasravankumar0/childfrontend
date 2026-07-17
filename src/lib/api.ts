@@ -12,14 +12,17 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// Redirect to login on 401
+// Redirect to login on 401 or 403 (expired/invalid token)
 api.interceptors.response.use(
   res => res,
   err => {
-    if (err.response?.status === 401) {
+    if (err.response?.status === 401 || err.response?.status === 403) {
       localStorage.removeItem('mdm_token')
       localStorage.removeItem('mdm_user')
-      window.location.href = '/login'
+      // Only redirect if not already on login page
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(err)
   }

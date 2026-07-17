@@ -200,6 +200,21 @@ export interface PagedResult<T> {
   pages: number
 }
 
+export interface Geofence {
+  id: number
+  deviceId: number
+  name: string
+  description?: string
+  latitude: number
+  longitude: number
+  radius: number
+  alertType: 'ENTER' | 'EXIT' | 'BOTH'
+  isInside?: boolean
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 export interface ApiResponse<T> {
   status: 'OK' | 'ERROR'
   message?: string
