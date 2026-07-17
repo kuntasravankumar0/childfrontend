@@ -2,7 +2,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../lib/api'
 import { DeviceNotificationItem } from '../types'
-import { ArrowLeft, Bell, Trash2, RefreshCw, Smartphone } from 'lucide-react'
+import { ArrowLeft, Bell, Trash2, RefreshCw, Smartphone, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { format } from 'date-fns'
 import { useState } from 'react'
@@ -25,6 +25,15 @@ export default function NotificationsPage() {
       qc.invalidateQueries({ queryKey: ['device-notifications', id] })
     },
     onError: () => toast.error('Failed to delete notifications'),
+  })
+
+  const deleteOneMutation = useMutation({
+    mutationFn: (notifId: number) => api.delete(`/devices/${id}/data/notifications/${notifId}`),
+    onSuccess: () => {
+      toast.success('Notification deleted')
+      qc.invalidateQueries({ queryKey: ['device-notifications', id] })
+    },
+    onError: () => toast.error('Failed to delete notification'),
   })
 
   // Backend returns { items: [...], total: N, page: P, pages: X }
@@ -78,7 +87,7 @@ export default function NotificationsPage() {
           <>
             <div className="divide-y divide-gray-50 max-h-[600px] overflow-y-auto">
               {notifications.map(n => (
-                <div key={n.id} className="px-5 py-3 hover:bg-gray-50">
+                <div key={n.id} className="px-5 py-3 hover:bg-gray-50 group">
                   <div className="flex items-start gap-3">
                     <div className="w-8 h-8 bg-primary-50 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
                       <Smartphone className="w-4 h-4 text-primary-600" />
@@ -94,6 +103,18 @@ export default function NotificationsPage() {
                         {format(new Date(n.receivedAt), 'MMM dd, yyyy HH:mm:ss')}
                       </p>
                     </div>
+                    {/* Individual delete button — only visible on hover */}
+                    <button
+                      onClick={() => {
+                        if (window.confirm('Delete this notification?'))
+                          deleteOneMutation.mutate(n.id)
+                      }}
+                      disabled={deleteOneMutation.isPending}
+                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-all disabled:opacity-30"
+                      title="Delete this notification"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               ))}
