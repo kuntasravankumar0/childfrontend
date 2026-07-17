@@ -101,12 +101,16 @@ export default function DevicesPage() {
   const total: number     = data?.data?.data?.total   ?? 0
   const pages: number     = data?.data?.data?.pages   ?? 1
 
-  // ── Fetch features for visible devices + reset expanded on page change ──
-  useEffect(() => {
-    setExpandedDevice(null) // Reset expanded device when list changes
-    if (devices.length === 0) return
+  // ── Stable key (avoids new array reference on every render) ───────
+  const deviceIdsKey = devices.map(d => d.id).sort().join(',')
 
-    const ids = devices.map(d => d.id)
+  // ── Reset expanded device on page/search change ───────────────────
+  useEffect(() => { setExpandedDevice(null) }, [page, search])
+
+  // ── Fetch features only when the visible device IDs actually change ─
+  useEffect(() => {
+    if (deviceIdsKey === '') return
+    const ids = deviceIdsKey.split(',').map(Number)
     api.post('/devices/features/batch', { ids })
       .then(res => {
         const raw = res.data?.data?.features ?? {}
@@ -117,7 +121,7 @@ export default function DevicesPage() {
         setFeaturesMap(mapped)
       })
       .catch((err: any) => console.warn('Failed to fetch device features:', err?.message || err))
-  }, [devices])
+  }, [deviceIdsKey])
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault()
