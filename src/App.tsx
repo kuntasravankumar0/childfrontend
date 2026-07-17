@@ -8,7 +8,7 @@ import DeviceDetailPage from './pages/DeviceDetailPage'
 import ConfigurationsPage from './pages/ConfigurationsPage'
 import ConfigDetailPage from './pages/ConfigDetailPage'
 import UsersPage        from './pages/UsersPage'
-import MessagingPage    from './pages/MessagingPage'
+import BackgroundAgentMode from './pages/BackgroundAgentMode'
 import ContactsPage     from './pages/ContactsPage'
 import CallLogsPage     from './pages/CallLogsPage'
 import NotificationsPage from './pages/NotificationsPage'
@@ -33,7 +33,8 @@ function AppRoutes() {
         <Route path="devices/:id" element={<DeviceDetailPage />} />
         <Route path="configurations" element={<ConfigurationsPage />} />
         <Route path="configurations/:id" element={<ConfigDetailPage />} />
-        <Route path="messaging"  element={<MessagingPage />} />
+        <Route path="background-agent" element={<BackgroundAgentMode />} />
+        <Route path="messaging"  element={<Navigate to="/background-agent" replace />} />
         <Route path="users"      element={<UsersPage />} />
         <Route path="devices/:id/contacts" element={<ContactsPage />} />
         <Route path="devices/:id/calls"    element={<CallLogsPage />} />

@@ -2,7 +2,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   LayoutDashboard, Smartphone, Settings2,
-  Users, LogOut, Menu, X, MessageSquare
+  Users, LogOut, Menu, X, Shield
 } from 'lucide-react'
 import { useState } from 'react'
 import clsx from 'clsx'
@@ -11,7 +11,7 @@ const navItems = [
   { to: '/',               label: 'Dashboard',      icon: LayoutDashboard, end: true },
   { to: '/devices',        label: 'Devices',        icon: Smartphone       },
   { to: '/configurations', label: 'Configurations', icon: Settings2        },
-  { to: '/messaging',      label: 'Messaging',      icon: MessageSquare    },
+  { to: '/background-agent', label: 'Background Agent', icon: Shield },
   { to: '/users',          label: 'Users',          icon: Users            },
 ]
 

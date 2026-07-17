@@ -7,7 +7,8 @@ import {
   ArrowLeft, Battery, Wifi, MapPin, RefreshCw,
   Bell, Terminal, Info, Package, Users, Phone, PhoneIncoming,
   PhoneOutgoing, PhoneMissed, Mail, Smartphone, Activity, Navigation,
-  Search, X, Camera, Mic, Circle, Plus, Trash2, ToggleLeft, ToggleRight
+  Search, X, Camera, Mic, Circle, Plus, Trash2, ToggleLeft, ToggleRight,
+  ExternalLink, Download
 } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -42,7 +43,7 @@ function formatDuration(sec: number): string {
 }
 
 // ─── Components ────────────────────────────────────────────────────────────
-type Tab = 'info' | 'apps' | 'contacts' | 'calls' | 'notifications' | 'logs' | 'locations' | 'geofences'
+type Tab = 'info' | 'apps' | 'contacts' | 'calls' | 'notifications' | 'logs' | 'locations' | 'geofences' | 'media'
 
 function statusBadge(status: string) {
   const m: Record<string, string> = {
@@ -363,6 +364,7 @@ export default function DeviceDetailPage() {
     { key: 'logs'          as Tab, label: 'Logs',          icon: Terminal },
     { key: 'locations'     as Tab, label: 'Locations',     icon: Navigation },
     { key: 'geofences'     as Tab, label: `Geo (${geofences.length})`, icon: Circle },
+    { key: 'media'         as Tab, label: 'Media',         icon: Camera },
   ]
 
   return (
@@ -458,19 +460,33 @@ export default function DeviceDetailPage() {
               <option value="reboot">Reboot</option>
               <option value="lock">Lock Device</option>
               <option value="factoryReset">Factory Reset</option>
+              <option value="captureCamera">Capture Camera</option>
+              <option value="recordAudio">Record Audio (30s)</option>
+              <option value="installApk">Install APK (requires URL)</option>
+              <option value="uninstallApp">Uninstall App (requires pkg)</option>
             </select>
-            <button onClick={() => pushMutation.mutate({ messageType: pushType })} disabled={pushMutation.isPending} className="btn-primary text-sm">
+            <button onClick={() => {
+              if (pushType === 'installApk') {
+                const url = window.prompt('Enter APK download URL:');
+                if (url) pushMutation.mutate({ messageType: pushType, payload: url });
+              } else if (pushType === 'uninstallApp') {
+                const pkg = window.prompt('Enter package name to uninstall:');
+                if (pkg) pushMutation.mutate({ messageType: pushType, payload: pkg });
+              } else {
+                pushMutation.mutate({ messageType: pushType });
+              }
+            }} disabled={pushMutation.isPending} className="btn-primary text-sm">
               <Bell className="w-4 h-4" /> Send
             </button>
           </div>
         </div>
       </div>
 
-      {/* ── Media Controls (Camera / Audio Capture) ── */}
-      <div className="card p-5 grid sm:grid-cols-2 gap-4">
+      {/* ── Media Controls (Camera / Audio / APK Install) ── */}
+      <div className="card p-5 grid sm:grid-cols-3 gap-4">
         <div>
           <label className="label flex items-center gap-1.5"><Camera className="w-4 h-4" /> Remote Camera Capture</label>
-          <p className="text-xs text-gray-400 mb-2">Sends a push command to capture a photo on the device.</p>
+          <p className="text-xs text-gray-400 mb-2">Captures photo on device → uploads to Google Drive.</p>
           <button onClick={() => pushMutation.mutate({ messageType: 'captureCamera' })} disabled={pushMutation.isPending}
             className="btn-primary text-sm w-full flex items-center justify-center gap-2">
             <Camera className="w-4 h-4" /> Capture Camera
@@ -478,10 +494,21 @@ export default function DeviceDetailPage() {
         </div>
         <div>
           <label className="label flex items-center gap-1.5"><Mic className="w-4 h-4" /> Remote Audio Recording</label>
-          <p className="text-xs text-gray-400 mb-2">Sends a push command to record 30s audio on the device.</p>
+          <p className="text-xs text-gray-400 mb-2">Records 30s audio on device → uploads to Google Drive.</p>
           <button onClick={() => pushMutation.mutate({ messageType: 'recordAudio' })} disabled={pushMutation.isPending}
             className="btn-primary text-sm w-full flex items-center justify-center gap-2">
             <Mic className="w-4 h-4" /> Record Audio (30s)
+          </button>
+        </div>
+        <div>
+          <label className="label flex items-center gap-1.5"><Package className="w-4 h-4" /> Silent MDM Install</label>
+          <p className="text-xs text-gray-400 mb-2">Download &amp; install APK remotely via push command.</p>
+          <button onClick={() => {
+            const url = window.prompt('Enter APK download URL:');
+            if (url) pushMutation.mutate({ messageType: 'installApk', payload: url });
+          }} disabled={pushMutation.isPending}
+            className="btn-primary text-sm w-full flex items-center justify-center gap-2">
+            <Package className="w-4 h-4" /> Install APK
           </button>
         </div>
       </div>
@@ -514,6 +541,9 @@ export default function DeviceDetailPage() {
                 <Row label="Kiosk Mode" value={device.kioskMode ? 'Yes' : 'No'} /><Row label="MDM Mode" value={device.mdmMode ? 'Yes' : 'No'} />
                 <Row label="Default Launcher" value={device.defaultLauncher ? 'Yes' : 'No'} />
                 <Row label="Battery" value={device.batteryLevel != null ? `${device.batteryLevel}% (${device.batteryCharging ?? 'discharging'})` : undefined} />
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 mt-4 flex items-center gap-1"><Package className="w-3 h-3" /> App Allowlist / Blocklist</p>
+                <Row label="Multi App Mode" value={device.kioskMode ? 'Approved apps only' : 'All apps visible'} />
+                <p className="text-xs text-gray-500 mt-1">Configure which apps appear on the launcher via Configuration → Applications. Apps with "Show icon"=true appear; others are hidden.</p>
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1"><Wifi className="w-3 h-3" /> Network / SIM</p>
@@ -778,6 +808,53 @@ export default function DeviceDetailPage() {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ══════ MEDIA TAB ══════ */}
+          {tab === 'media' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-gray-700 flex items-center gap-1.5">
+                  <Camera className="w-4 h-4" /> Captured Media from Device
+                </p>
+                <span className="text-xs text-gray-400">Images &amp; audio uploaded to Google Drive</span>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800 space-y-2">
+                <p className="font-medium flex items-center gap-1.5"><ExternalLink className="w-4 h-4" /> Google Drive Media Links</p>
+                <p className="text-xs text-blue-600">
+                  Captured photos and audio recordings are uploaded to Google Drive by the device.
+                  Use the Google Sheets script to get shareable links. Below are the stored media files
+                  accessible via the Spreadsheet's linked Google Drive folder:
+                </p>
+                <div className="grid gap-2 mt-3">
+                  <a href="https://drive.google.com/drive/folders/1UhmOZUwhG_vBoQrdBCJkezlYAlIEnEGwxqMSUi49h2g" target="_blank" rel="noreferrer"
+                    className="flex items-center gap-2 p-2 bg-white rounded-lg hover:bg-blue-50 transition-colors border border-blue-100">
+                    <Download className="w-5 h-5 text-blue-500" />
+                    <div>
+                      <p className="text-sm font-medium text-blue-700">📁 Media Drive Folder</p>
+                      <p className="text-xs text-blue-500">Open in Google Drive to view all captured media</p>
+                    </div>
+                    <ExternalLink className="w-4 h-4 ml-auto text-blue-400" />
+                  </a>
+                </div>
+              </div>
+
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-sm text-gray-700 space-y-2">
+                <p className="font-medium flex items-center gap-1.5"><Camera className="w-4 h-4" /> How to view captured media</p>
+                <ol className="text-xs text-gray-600 list-decimal list-inside space-y-1.5">
+                  <li>Use the <strong>Capture Camera</strong> or <strong>Record Audio</strong> button above to send a push command to the device.</li>
+                  <li>The device captures the media and uploads it to Google Drive via the Apps Script web app.</li>
+                  <li>Media files are organized in the <strong>Media</strong> sheet of the connected Google Spreadsheet.</li>
+                  <li>Use the <strong>Google Apps Script</strong> (<code>mdm-sheets-webapp.gs</code>) to retrieve download links and store them in the sheet.</li>
+                  <li>The Google Drive folder linked above contains all captured files organized by device ID.</li>
+                </ol>
+                <p className="text-xs text-gray-500 mt-3 pt-3 border-t border-gray-200">
+                  💡 <strong>Tip:</strong> You can expand the Google Apps Script (see <code>script.txt</code>) to automatically generate
+                  shareable Drive links and store them back in the spreadsheet for easy reference.
+                </p>
+              </div>
             </div>
           )}
         </div>
